@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include "MobileDevice.h"
 
@@ -13,6 +16,7 @@ static CFMutableDictionaryRef liveConnections;
 static int debug;
 static CFStringRef requiredDeviceId;
 static char requiredProcessName[256];
+static char highlightWord[256];
 static void (*printMessage)(int fd, const char *, size_t);
 static void (*printSeparator)(int fd);
 
@@ -91,6 +95,35 @@ static unsigned char should_print_message(const char *buffer, size_t length)
 #define COLOR_WHITE         "\e[0;37m"
 #define COLOR_DARK_WHITE    "\e[0;37m"
 
+static const char * write_highlighted(int fd, const char *buffer, size_t length)
+{
+    size_t offset = 0;
+    
+    if (highlightWord != NULL) {
+        char *s = strstr(buffer, highlightWord);
+        
+        while (s != NULL) {
+            size_t highlightWordSize = strlen(highlightWord) * sizeof(char);
+            
+            const char *firstHalf = buffer + offset;
+            size_t firstHalfSize = (s - firstHalf) * sizeof(char);
+            
+            const char *secondHalf = firstHalf + firstHalfSize + highlightWordSize;
+            
+            write_const(fd, COLOR_WHITE);
+            write_fully(fd, firstHalf, firstHalfSize);
+            write_const(fd, COLOR_RED);
+            write_fully(fd, highlightWord, highlightWordSize);
+            
+            offset = secondHalf - buffer;
+            
+            s = strstr(buffer + offset, highlightWord);
+        }
+    }
+    
+    return buffer + offset;
+}
+
 static void write_colored(int fd, const char *buffer, size_t length)
 {
     if (length < 16) {
@@ -147,8 +180,13 @@ static void write_colored(int fd, const char *buffer, size_t length)
             write_fully(fd, buffer + space_offsets[1] + 2, levelLength - 4);
             write_string(fd, darkColor);
             write_fully(fd, buffer + space_offsets[1] + levelLength - 2, 1);
-            write_const(fd, COLOR_DARK_WHITE);
-            write_fully(fd, buffer + space_offsets[1] + levelLength - 1, 1);
+            
+            const char *remaining = write_highlighted(fd, buffer + space_offsets[1] + levelLength - 1, 1);
+            
+            if (remaining != NULL) {
+                write_const(fd, COLOR_DARK_WHITE);
+                write_fully(fd, remaining, strlen(remaining) * sizeof(char));
+            }
         } else {
         level_unformatted:
             write_const(fd, COLOR_RESET);
@@ -277,14 +315,14 @@ static void color_separator(int fd)
 int main (int argc, char * const argv[])
 {
     if ((argc == 2) && (strcmp(argv[1], "--help") == 0)) {
-        fprintf(stderr, "Usage: %s [options]\nOptions:\n -d\t\t\tInclude connect/disconnect messages in standard out\n -u <udid>\t\tShow only logs from a specific device\n -p <process name>\tShow only logs from a specific process\n\nControl-C to disconnect\nMail bug reports and suggestions to <ryan.petrich@medialets.com>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [options]\nOptions:\n -d\t\t\tInclude connect/disconnect messages in standard out\n -u <udid>\t\tShow only logs from a specific device\n -p <process name>\tShow only logs from a specific process\n -h <keyword>\tHighlight all instances of a specific keyword\n\nControl-C to disconnect\nMail bug reports and suggestions to <ryan.petrich@medialets.com>\n", argv[0]);
         return 1;
     }
     int c;
     bool use_separators = false;
     bool force_color = false;
     memset(requiredProcessName, '\0', 256);
-    while ((c = getopt(argc, argv, "dcsu:p:")) != -1)
+    while ((c = getopt(argc, argv, "dcsu:p:h:")) != -1)
         switch (c)
     {
         case 'd':
@@ -312,6 +350,9 @@ int main (int argc, char * const argv[])
             else
                 fprintf(stderr, "Unknown option character `\\x%x'.\n", optopt);
             return 1;
+        case 'h':
+            strcpy(highlightWord, optarg);
+            break;
         default:
             abort();
     }
